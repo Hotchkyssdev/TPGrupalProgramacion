@@ -4,16 +4,22 @@ import java.awt.Color;
 import java.awt.Graphics2D;
 
 public class Bloque extends Entidad {
-
     private double ancho;
     private double alto;
-    private int resistencia; // Cuántos impactos soporta el bloque
+    private int resistencia; 
 
-    public Bloque(double x, double y, double ancho, double alto, int resistencia) {
+    public Bloque(double x, double y, double ancho, double alto) {
         super(x, y);
         this.ancho = ancho;
         this.alto = alto;
-        this.resistencia = resistencia;
+        this.resistencia = 1;
+    }
+
+    public Bloque(double x, double y, double ancho, double alto, int resistenciaInicial) {
+        super(x, y);
+        this.ancho = ancho;
+        this.alto = alto;
+        this.resistencia = resistenciaInicial;
     }
 
     public double getAncho() { return ancho; }
@@ -23,18 +29,17 @@ public class Bloque extends Entidad {
     public void golpear() {
         resistencia--;
         if (resistencia <= 0) {
-            destruir(); // Método heredado de Entidad que pone viva = false
+            destruir(); 
         }
     }
 
     @Override
     public void actualizar(double dt) {
-        // Los bloques son estáticos, no necesitan lógica de movimiento por segundo
+
     }
 
     @Override
     public void dibujar(Graphics2D g) {
-        // Cambiar de color según la resistencia del bloque
         if (resistencia == 2) {
             g.setColor(Color.ORANGE);
         } else if (resistencia >= 3) {
