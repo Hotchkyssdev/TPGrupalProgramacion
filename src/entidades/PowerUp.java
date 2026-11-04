@@ -2,6 +2,7 @@ package entidades;
 
 import java.awt.Color;
 import java.awt.Graphics2D;
+import java.awt.Rectangle;
 
 public class PowerUp extends Entidad {
 
@@ -25,6 +26,10 @@ public class PowerUp extends Entidad {
 
     public double getAlto() {
         return alto;
+    }
+
+    public Rectangle getLimites() {
+        return new Rectangle((int) getX(), (int) getY(), (int) ancho, (int) alto);
     }
 
     @Override
