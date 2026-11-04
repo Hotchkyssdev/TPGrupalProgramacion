@@ -23,12 +23,10 @@ public abstract class ListaBase<T> implements Lista<T> {
         return -1;
     }
 
-    @Override
     public boolean contiene(T elemento) {
         return indiceDe(elemento) >= 0;
     }
 
-    @Override
     public boolean quitar(T elemento) {
         int indice = indiceDe(elemento);
         if (indice < 0) {
@@ -38,8 +36,6 @@ public abstract class ListaBase<T> implements Lista<T> {
         return true;
     }
 
-    // Recorrido con for-each
-    @Override
     public Iterator<T> iterator() {
         return new Iterator<T>() {
             private int actual = 0;

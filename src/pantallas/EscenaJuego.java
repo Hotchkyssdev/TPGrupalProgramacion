@@ -1,8 +1,10 @@
 package pantallas;
 
-import reglas.Mundo;
+import motor.Mundo;
 import motor.Escena;
 import ui.Texto;
+import estructuras.MiLista;
+import entidades.Entidad;
 import java.awt.Color;
 import java.awt.Graphics2D;
 
@@ -11,14 +13,17 @@ public class EscenaJuego extends Escena {
 
     @Override
     public void alEntrar() {
-        mundo = new Mundo(getContexto().getAncho(), getContexto().getAlto());
+        mundo = new Mundo(getContexto().getAncho(), getContexto().getAlto(), new MiLista<Entidad>());
     }
 
     @Override
     public void actualizar(double dt) {
-        mundo.actualizar(dt, getEntrada());
+        // Procesamos el movimiento de la paleta con la instancia de entrada de la escena
+        mundo.procesarEntrada(getEntrada());
+        
+        // Actualizamos el motor del mundo
+        mundo.actualizar(dt);
 
-        // Si el juego termina, transiciona a la pantalla de fin pasando el puntaje
         if (mundo.estaTerminado()) {
             getContexto().irA(new EscenaFin(mundo.getPuntaje()));
         }
@@ -29,10 +34,8 @@ public class EscenaJuego extends Escena {
         g.setColor(Color.DARK_GRAY);
         g.fillRect(0, 0, getContexto().getAncho(), getContexto().getAlto());
 
-        // Dibujar elementos del mundo
         mundo.dibujar(g);
 
-        // HUD superior usando ui.Texto
         Texto.izquierda(g, "Puntaje: " + mundo.getPuntaje(), 20, 30, 14, Color.WHITE);
         Texto.derecha(g, "Vidas: " + mundo.getVidas(), getContexto().getAncho() - 20, 30, 14, Color.RED);
     }
