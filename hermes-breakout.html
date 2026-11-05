@@ -1,0 +1,488 @@
+<title>Hermes Breakout</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<style>
+/* Layout: one 4:3 canvas centred in a dark frame, scaled to fit; touch buttons appear only on coarse pointers.
+   The game keeps the original's own Java palette inside the canvas, so the page is a deliberate single dark look. */
+:root {
+  --bg: #0e1015;
+  --panel: #171a21;
+  --line: #2a2f3a;
+  --fg: #e8eaf0;
+  --muted: #8b93a3;
+  --accent: #ffff00;
+  color-scheme: dark;
+  --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+}
+* { box-sizing: border-box; }
+html, body { height: 100%; }
+body {
+  background: var(--bg);
+  color: var(--fg);
+  font: 14px/1.4 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  padding-block: 12px;
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  overflow-x: hidden;
+}
+.top {
+  width: min(100%, 800px);
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+h1 { margin: 0; font-size: 15px; letter-spacing: .12em; text-transform: uppercase; font-weight: 700; }
+.keys { color: var(--muted); font-size: 12px; }
+kbd {
+  font: 11px var(--mono);
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-bottom-width: 2px;
+  border-radius: 3px;
+  padding: 1px 5px;
+  color: var(--fg);
+}
+#stage {
+  width: min(100%, 800px, calc((100dvh - 150px) * 4 / 3));
+  aspect-ratio: 4 / 3;
+  border: 1px solid var(--line);
+  background: #000;
+  line-height: 0;
+}
+canvas { width: 100%; height: 100%; display: block; outline: none; touch-action: none; }
+.pad { display: none; width: min(100%, 800px); gap: 10px; }
+.pad button {
+  flex: 1;
+  min-height: 52px;
+  font: 700 18px system-ui, sans-serif;
+  color: var(--fg);
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+}
+.pad button:active, .pad button.on { background: #262b36; border-color: var(--accent); }
+.pad button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+@media (pointer: coarse) { .pad { display: flex; } }
+</style>
+
+<div class="top">
+  <h1>Hermes Breakout</h1>
+  <div class="keys"><kbd>A</kbd> <kbd>D</kbd> o <kbd>←</kbd> <kbd>→</kbd> mover · <kbd>Enter</kbd> continuar</div>
+</div>
+<div id="stage"><canvas id="c" width="800" height="600" tabindex="0" aria-label="Hermes Breakout"></canvas></div>
+<div class="pad" id="pad">
+  <button id="bl" aria-label="Izquierda">◀</button>
+  <button id="be" aria-label="Enter">ENTER</button>
+  <button id="br" aria-label="Derecha">▶</button>
+</div>
+
+<script>
+(() => {
+  'use strict';
+
+  // ===== Motor (motor.Motor / motor.Entrada / motor.Ventana) =====
+  const ANCHO = 800, ALTO = 600;
+  const PASO = 1 / 120;        // Motor.PASO
+  const MAXIMO_PASOS = 12;     // Ventana.MAXIMO_PASOS
+
+  const entrada = {
+    abajo: new Set(),
+    nuevas: new Set(),
+    estaPresionada(k) { return this.abajo.has(k); },
+    fuePresionada(k) { return this.nuevas.has(k); },
+    presionar(k) { if (!this.abajo.has(k)) { this.abajo.add(k); this.nuevas.add(k); } },
+    soltar(k) { this.abajo.delete(k); },
+    terminarCuadro() { this.nuevas.clear(); },
+  };
+
+  const KEYMAP = {
+    ArrowLeft: 'izq', KeyA: 'izq',
+    ArrowRight: 'der', KeyD: 'der',
+    Enter: 'enter', NumpadEnter: 'enter',
+  };
+
+  addEventListener('keydown', e => {
+    const k = KEYMAP[e.code];
+    if (!k) return;
+    e.preventDefault();
+    if (!e.repeat) entrada.presionar(k);
+  });
+  addEventListener('keyup', e => {
+    const k = KEYMAP[e.code];
+    if (k) { e.preventDefault(); entrada.soltar(k); }
+  });
+  addEventListener('blur', () => entrada.abajo.clear());
+
+  // ===== Dibujo (ui.Texto + Java Color) =====
+  const Color = {
+    BLACK: '#000000', WHITE: '#ffffff', RED: '#ff0000', GREEN: '#00ff00',
+    YELLOW: '#ffff00', CYAN: '#00ffff', ORANGE: '#ffc800',
+    DARK_GRAY: '#404040', LIGHT_GRAY: '#c0c0c0',
+  };
+  const FUENTE = '"Helvetica Neue", Helvetica, Arial, sans-serif';
+
+  function texto(g, s, x, y, tam, color, align) {
+    g.font = `bold ${tam}px ${FUENTE}`;
+    g.fillStyle = color;
+    g.textAlign = align;
+    g.textBaseline = 'alphabetic';
+    g.fillText(s, x, y);
+  }
+  const izquierda = (g, s, x, y, t, c) => texto(g, s, x, y, t, c, 'left');
+  const centrado  = (g, s, x, y, t, c) => texto(g, s, x, y, t, c, 'center');
+  const derecha   = (g, s, x, y, t, c) => texto(g, s, x, y, t, c, 'right');
+
+  const i = Math.trunc; // d2i de Java
+
+  function rellenarOvalo(g, x, y, w, h) {
+    g.beginPath();
+    g.ellipse(x + w / 2, y + h / 2, w / 2, h / 2, 0, 0, Math.PI * 2);
+    g.fill();
+  }
+
+  // ===== Entidades =====
+  function nuevaPelota(x, y, radio, vx, vy) { return { x, y, radio, vx, vy }; }
+
+  function ajustarPelota(p, w) {
+    if (p.x - p.radio < 0) { p.x = p.radio; p.vx = -p.vx; }
+    else if (p.x + p.radio > w) { p.x = w - p.radio; p.vx = -p.vx; }
+    if (p.y - p.radio < 0) { p.y = p.radio; p.vy = -p.vy; }
+  }
+
+  function nuevoBloque(x, y, ancho, alto, resistencia) {
+    return { x, y, ancho, alto, resistencia, viva: true };
+  }
+  function golpear(b) { b.resistencia--; if (b.resistencia <= 0) b.viva = false; }
+
+  function nuevoPowerUp(x, y, tipo) { return { x, y, ancho: 20, alto: 20, tipo, vy: 130 }; }
+
+  // ===== Reglas (reglas.Mundo) =====
+  class Mundo {
+    constructor(w, h) {
+      this.w = w; this.h = h;
+      this.puntaje = 0;
+      this.vidas = 3;
+      this.juegoGanado = false;
+      this.nivelCompletado = false;   // el nivel se limpió y se espera al jugador
+      this.puntajeInicioNivel = 0;    // para mostrar lo ganado en el nivel
+      this.paleta = { x: w / 2 - 40, y: h - 40, ancho: 80, alto: 15, vx: 0 };
+      this.pelotas = [nuevaPelota(w / 2, h / 2, 8, 180, -180)];
+      this.ladrillos = [];
+      this.powerUps = [];
+      this.nivelesPendientes = [1, 2, 3, 4];   // cola
+      this.powerUpsRecogidos = [];             // pila
+      this.nivelActual = 0;
+      if (this.nivelesPendientes.length) {
+        this.nivelActual = this.nivelesPendientes.shift();
+        this.cargarBloquesNivel(this.nivelActual);
+      }
+    }
+
+    cargarBloquesNivel(nivel) {
+      this.ladrillos = [];
+      this.powerUps = [];
+      const cfg = {
+        1: { filas: 3, paso: 35, alto: 25, res: () => 1 },
+        2: { filas: 4, paso: 30, alto: 20, res: () => 1 },
+        3: { filas: 3, paso: 35, alto: 25, res: j => (j === 0 ? 2 : 1) },
+        4: { filas: 4, paso: 30, alto: 20, res: j => (j <= 1 ? 2 : 1) },
+      }[nivel];
+      if (!cfg) return;
+      for (let c = 0; c < 7; c++) {
+        for (let f = 0; f < cfg.filas; f++) {
+          this.ladrillos.push(nuevoBloque(50 + c * 95, 40 + f * cfg.paso, 85, cfg.alto, cfg.res(f)));
+        }
+      }
+    }
+
+    actualizar(dt, ent) {
+      if (this.nivelCompletado) return;   // el mundo queda congelado entre niveles
+      const pal = this.paleta;
+      if (ent.estaPresionada('izq')) pal.vx = -380;
+      else if (ent.estaPresionada('der')) pal.vx = 380;
+      else pal.vx = 0;
+      pal.x += pal.vx * dt;
+      if (pal.x < 0) pal.x = 0;
+      if (pal.x + pal.ancho > this.w) pal.x = this.w - pal.ancho;
+
+      // Pelotas
+      for (let n = 0; n < this.pelotas.length; n++) {
+        const p = this.pelotas[n];
+        p.x += p.vx * dt;
+        p.y += p.vy * dt;
+        ajustarPelota(p, this.w);
+
+        if (p.x >= pal.x && p.x <= pal.x + pal.ancho &&
+            p.y + p.radio >= pal.y && p.y - p.radio <= pal.y + pal.alto) {
+          p.y = pal.y - p.radio;
+          p.vy = -Math.abs(p.vy);
+        }
+
+        for (let k = 0; k < this.ladrillos.length; k++) {
+          const b = this.ladrillos[k];
+          if (b.viva && p.x >= b.x && p.x <= b.x + b.ancho &&
+              p.y >= b.y && p.y <= b.y + b.alto) {
+            golpear(b);
+            p.vy = -p.vy;
+            this.puntaje += 15;
+            if (!b.viva) {
+              this.ladrillos.splice(k, 1);
+              if (Math.random() < 0.3) {
+                const tipo = Math.random() < 0.5 ? 'TRES_PELOTAS' : 'TRIPLICAR_PELOTAS';
+                this.powerUps.push(nuevoPowerUp(b.x + b.ancho / 2 - 10, b.y, tipo));
+              }
+            }
+            break;
+          }
+        }
+
+        if (p.y > this.h) { this.pelotas.splice(n, 1); n--; }
+      }
+
+      // Power-ups
+      for (let n = 0; n < this.powerUps.length; n++) {
+        const u = this.powerUps[n];
+        u.y += u.vy * dt;
+
+        if (u.x + u.ancho >= pal.x && u.x <= pal.x + pal.ancho &&
+            u.y + u.alto >= pal.y && u.y <= pal.y + pal.alto) {
+          this.powerUpsRecogidos.push(u.tipo);
+          const cx = pal.x + pal.ancho / 2, cy = pal.y - 10;
+          if (u.tipo === 'TRES_PELOTAS') {
+            if (this.pelotas.length < 8) {
+              this.pelotas.push(nuevaPelota(cx, cy, 8, -160, -210));
+              this.pelotas.push(nuevaPelota(cx, cy, 8, 0, -230));
+              this.pelotas.push(nuevaPelota(cx, cy, 8, 160, -210));
+            }
+          } else if (u.tipo === 'TRIPLICAR_PELOTAS') {
+            const cantidad = this.pelotas.length;
+            for (let k = 0; k < cantidad; k++) {
+              const b = this.pelotas[k];
+              if (this.pelotas.length < 9) {
+                this.pelotas.push(nuevaPelota(b.x, b.y, b.radio, -b.vx, b.vy));
+                this.pelotas.push(nuevaPelota(b.x, b.y, b.radio, b.vx, -b.vy));
+              }
+            }
+          }
+          this.powerUps.splice(n, 1); n--;
+        } else if (u.y > this.h) {
+          this.powerUps.splice(n, 1); n--;
+        }
+      }
+
+      // Vidas
+      if (this.pelotas.length === 0) {
+        this.vidas--;
+        this.pelotas.push(nuevaPelota(this.w / 2, this.h / 2, 8, 180, -180));
+      }
+
+      // Nivel completado
+      if (this.ladrillos.length === 0) {
+        if (this.nivelesPendientes.length) {
+          // Solo se avisa; el siguiente nivel se carga en continuarAlSiguienteNivel()
+          this.nivelCompletado = true;
+        } else {
+          this.juegoGanado = true;
+        }
+      }
+    }
+
+    continuarAlSiguienteNivel() {
+      if (!this.nivelCompletado || !this.nivelesPendientes.length) return;
+      this.nivelActual = this.nivelesPendientes.shift();
+      this.cargarBloquesNivel(this.nivelActual);
+      this.pelotas = [nuevaPelota(this.w / 2, this.h / 2, 8, 190, -190)];
+      this.puntajeInicioNivel = this.puntaje;
+      this.nivelCompletado = false;
+    }
+
+    getPuntajeDelNivel() { return this.puntaje - this.puntajeInicioNivel; }
+    getProximoNivel() { return this.nivelesPendientes.length ? this.nivelesPendientes[0] : -1; }
+
+    dibujar(g) {
+      const p = this.paleta;
+      g.fillStyle = Color.WHITE;
+      g.fillRect(i(p.x), i(p.y), i(p.ancho), i(p.alto));
+
+      g.fillStyle = Color.YELLOW;
+      for (const b of this.pelotas) {
+        rellenarOvalo(g, i(b.x - b.radio), i(b.y - b.radio), i(b.radio * 2), i(b.radio * 2));
+      }
+
+      for (const b of this.ladrillos) {
+        g.fillStyle = b.resistencia === 2 ? Color.ORANGE : (b.resistencia >= 3 ? Color.RED : Color.GREEN);
+        g.fillRect(i(b.x), i(b.y), i(b.ancho), i(b.alto));
+        g.strokeStyle = Color.BLACK;
+        g.lineWidth = 1;
+        g.strokeRect(i(b.x) + 0.5, i(b.y) + 0.5, i(b.ancho), i(b.alto));
+      }
+
+      for (const u of this.powerUps) {
+        g.fillStyle = u.tipo === 'TRES_PELOTAS' ? Color.GREEN : Color.CYAN;
+        rellenarOvalo(g, i(u.x), i(u.y), u.ancho, u.alto);
+        g.strokeStyle = Color.WHITE;
+        g.lineWidth = 1;
+        g.beginPath();
+        g.ellipse(i(u.x) + u.ancho / 2 + 0.5, i(u.y) + u.alto / 2 + 0.5, u.ancho / 2, u.alto / 2, 0, 0, Math.PI * 2);
+        g.stroke();
+      }
+    }
+
+    estaTerminado() { return !(this.vidas > 0 && !this.juegoGanado); }
+  }
+
+  // ===== Pantallas =====
+  let escenaActual = null, escenaPendiente = null;
+  const ctxEscena = { irA(e) { escenaPendiente = e; } };
+
+  class EscenaMenu {
+    actualizar() {
+      if (entrada.fuePresionada('enter')) ctxEscena.irA(new EscenaJuego());
+    }
+    dibujar(g) {
+      g.fillStyle = Color.BLACK;
+      g.fillRect(0, 0, ANCHO, ALTO);
+      centrado(g, 'BREAKOUT - JAVA GAME JAM', ANCHO / 2, 180, 24, Color.WHITE);
+      centrado(g, 'Usa A/D o Flechas para moverte', ANCHO / 2, 250, 14, Color.LIGHT_GRAY);
+      centrado(g, 'Presiona [ENTER] para Comenzar', ANCHO / 2, 330, 16, Color.YELLOW);
+    }
+  }
+
+  class EscenaJuego {
+    // Con un mundo existente se vuelve a la misma partida (después de la pantalla entre niveles)
+    constructor(mundoExistente) { this.mundo = mundoExistente || null; }
+    alEntrar() { if (!this.mundo) this.mundo = new Mundo(ANCHO, ALTO); }
+    actualizar(dt) {
+      this.mundo.actualizar(dt, entrada);
+      if (this.mundo.estaTerminado()) ctxEscena.irA(new EscenaFin(this.mundo.puntaje));
+      else if (this.mundo.nivelCompletado) ctxEscena.irA(new EscenaNivelCompleto(this.mundo));
+    }
+    dibujar(g) {
+      g.fillStyle = Color.DARK_GRAY;
+      g.fillRect(0, 0, ANCHO, ALTO);
+      this.mundo.dibujar(g);
+      izquierda(g, 'Puntaje: ' + this.mundo.puntaje, 20, 30, 14, Color.WHITE);
+      derecha(g, 'Vidas: ' + this.mundo.vidas, ANCHO - 20, 30, 14, Color.RED);
+    }
+  }
+
+  // Pantalla entre niveles: muestra el puntaje y espera ENTER
+  class EscenaNivelCompleto {
+    constructor(mundo) {
+      this.mundo = mundo;
+      // Se guardan al crear la escena para que lo mostrado no cambie
+      this.nivelTerminado = mundo.nivelActual;
+      this.proximoNivel = mundo.getProximoNivel();
+      this.puntajeDelNivel = mundo.getPuntajeDelNivel();
+      this.puntajeTotal = mundo.puntaje;
+      this.vidas = mundo.vidas;
+    }
+    actualizar() {
+      if (entrada.fuePresionada('enter')) {
+        this.mundo.continuarAlSiguienteNivel();
+        ctxEscena.irA(new EscenaJuego(this.mundo));
+      }
+    }
+    dibujar(g) {
+      const c = ANCHO / 2;
+      g.fillStyle = Color.BLACK;
+      g.fillRect(0, 0, ANCHO, ALTO);
+      centrado(g, '¡NIVEL ' + this.nivelTerminado + ' COMPLETADO!', c, 160, 24, Color.GREEN);
+      centrado(g, 'Puntaje del nivel: +' + this.puntajeDelNivel, c, 225, 16, Color.LIGHT_GRAY);
+      centrado(g, 'Puntaje total: ' + this.puntajeTotal, c, 265, 18, Color.WHITE);
+      centrado(g, 'Vidas: ' + this.vidas, c, 300, 14, Color.LIGHT_GRAY);
+      centrado(g, 'Siguiente: Nivel ' + this.proximoNivel, c, 360, 16, Color.WHITE);
+      centrado(g, 'Presiona [ENTER] para continuar', c, 420, 16, Color.YELLOW);
+    }
+  }
+
+  class EscenaFin {
+    constructor(puntaje) { this.puntajeFinal = puntaje; }
+    actualizar() {
+      if (entrada.fuePresionada('enter')) ctxEscena.irA(new EscenaMenu());
+    }
+    dibujar(g) {
+      g.fillStyle = Color.BLACK;
+      g.fillRect(0, 0, ANCHO, ALTO);
+      centrado(g, 'FIN DE LA PARTIDA', ANCHO / 2, 180, 24, Color.RED);
+      centrado(g, 'Puntaje Final: ' + this.puntajeFinal, ANCHO / 2, 240, 18, Color.WHITE);
+      centrado(g, 'Presiona [ENTER] para volver al Menú', ANCHO / 2, 320, 14, Color.YELLOW);
+    }
+  }
+
+  function cambiar(e) {
+    escenaActual = e;
+    if (e.alEntrar) e.alEntrar();
+  }
+
+  function paso() {
+    if (escenaPendiente) { const e = escenaPendiente; escenaPendiente = null; cambiar(e); }
+    if (escenaActual) escenaActual.actualizar(PASO);
+    entrada.terminarCuadro();
+  }
+
+  // ===== Canvas, escalado y bucle =====
+  const canvas = document.getElementById('c');
+  const g = canvas.getContext('2d');
+
+  function ajustarCanvas() {
+    const r = canvas.getBoundingClientRect();
+    const dpr = Math.min(window.devicePixelRatio || 1, 3);
+    const w = Math.max(1, Math.round(r.width * dpr));
+    const h = Math.max(1, Math.round(r.height * dpr));
+    if (canvas.width !== w || canvas.height !== h) { canvas.width = w; canvas.height = h; }
+  }
+  new ResizeObserver(ajustarCanvas).observe(canvas);
+  addEventListener('resize', ajustarCanvas);
+
+  function dibujar() {
+    ajustarCanvas();
+    g.setTransform(canvas.width / ANCHO, 0, 0, canvas.height / ALTO, 0, 0);
+    g.imageSmoothingEnabled = true;
+    if (escenaActual) escenaActual.dibujar(g);
+  }
+
+  let ultimo = performance.now(), acumulado = 0;
+  function tick(ahora) {
+    acumulado += Math.min((ahora - ultimo) / 1000, 0.25);
+    ultimo = ahora;
+    let pasos = 0;
+    while (acumulado >= PASO && pasos < MAXIMO_PASOS) { paso(); acumulado -= PASO; pasos++; }
+    if (pasos === MAXIMO_PASOS) acumulado = 0;
+    dibujar();
+    requestAnimationFrame(tick);
+  }
+
+  // Toque / ratón: tocar el canvas hace de ENTER en menú y pantalla final
+  canvas.addEventListener('pointerdown', () => {
+    canvas.focus({ preventScroll: true });
+    if (!(escenaActual instanceof EscenaJuego)) { entrada.presionar('enter'); setTimeout(() => entrada.soltar('enter'), 50); }
+  });
+
+  // Botones en pantalla (solo se ven en dispositivos táctiles)
+  function sujetar(id, tecla) {
+    const b = document.getElementById(id);
+    const on = e => { e.preventDefault(); b.classList.add('on'); entrada.presionar(tecla); };
+    const off = e => { e.preventDefault(); b.classList.remove('on'); entrada.soltar(tecla); };
+    b.addEventListener('pointerdown', on);
+    ['pointerup', 'pointercancel', 'pointerleave'].forEach(ev => b.addEventListener(ev, off));
+  }
+  sujetar('bl', 'izq'); sujetar('br', 'der'); sujetar('be', 'enter');
+
+  // Para pruebas automáticas
+  window.__hb = { get escena() { return escenaActual; }, entrada, paso, Mundo };
+
+  cambiar(new EscenaMenu());
+  canvas.focus({ preventScroll: true });
+  requestAnimationFrame(t => { ultimo = t; requestAnimationFrame(tick); });
+})();
+</script>
